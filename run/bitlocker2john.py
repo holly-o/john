@@ -8,6 +8,7 @@
 # Refs: https://github.com/libyal/libbde/blob/main/documentation/BitLocker%20Drive%20Encryption%20(BDE)%20format.asciidoc#encryption_methods
 
 import argparse
+import sys
 
 BITLOCKER_SIGNATURE = '-FVE-FS-'
 BITLOCKER_TO_GO_SIGNATURE = 'MSWIN4.1'
@@ -23,7 +24,7 @@ HASHES = []
 def guid_to_hex(guid):
     guid_parts = guid.split('-')
 
-    search_target = ''.join([guid_parts[0][i:i+2] for i in range(0, len(guid_parts[0]), 2)][::-1])
+    search_target =  ''.join([guid_parts[0][i:i+2] for i in range(0, len(guid_parts[0]), 2)][::-1])
     search_target += ''.join([guid_parts[1][i:i+2] for i in range(0, len(guid_parts[1]), 2)][::-1])
     search_target += ''.join([guid_parts[2][i:i+2] for i in range(0, len(guid_parts[2]), 2)][::-1])
     search_target += guid_parts[3]
@@ -40,7 +41,7 @@ def hex_to_guid(hex_str):
     guid_parts[3] = hex_str[16:20]
     guid_parts[4] = hex_str[20:]
 
-    guid = ''.join([guid_parts[0][i:i+2] for i in range(0, len(guid_parts[0]), 2)][::-1])
+    guid  = ''.join([guid_parts[0][i:i+2] for i in range(0, len(guid_parts[0]), 2)][::-1])
     guid += '-'
     guid += ''.join([guid_parts[1][i:i+2] for i in range(0, len(guid_parts[1]), 2)][::-1])
     guid += '-'
@@ -54,6 +55,15 @@ def hex_to_guid(hex_str):
 
 def uint_to_int(b):
     return int(b[::-1].hex(), 16)
+
+# call in place of fp.read(), to stop reading out of bounds of file
+def try_read_fp(fp, bytes_to_read):
+    out = fp.read(bytes_to_read)
+    if len(out) != bytes_to_read:
+        print("Error reading out of bounds of file, exiting.")
+        sys.exit(1)
+
+    return out
 
 def parse_FVEK(fvek_data):
     print("\nParsing FVEK...")
@@ -190,19 +200,23 @@ def main():
     args = p.parse_args()
     bitlocker_partition = args.image_path
 
-    bitlocker_offset = int(args.offset)
+    # to allow for hex offsets
+    if type(args.offset) == str and args.offset.startswith('0x'):
+        bitlocker_offset = int(args.offset, 16)
+    else:
+        bitlocker_offset = int(args.offset)
 
     with open(bitlocker_partition, 'rb') as fp:
 
         fp.seek(bitlocker_offset)
-        boot_entry_point = fp.read(3)
+        boot_entry_point = try_read_fp(fp, 3)
 
-        header = fp.read(8)
+        header = try_read_fp(fp, 8)
         if header.decode('latin-1') not in [BITLOCKER_SIGNATURE, BITLOCKER_TO_GO_SIGNATURE]:
             print("[!] Supplied image path is not a BitLocker partition. Try specifiying the offset of the BitLocker partition with -o")
             exit()
         print(f'[+] BitLocker signature found: {header.decode()}')
-        sector_size = uint_to_int(fp.read(2))
+        sector_size = uint_to_int(try_read_fp(fp, 2))
 
         if header.decode('latin-1') == BITLOCKER_SIGNATURE:
             guid_offset = 0xa0
@@ -210,18 +224,23 @@ def main():
             guid_offset = 0x1a8
 
         fp.seek(guid_offset  + bitlocker_offset)
-        volume_guid = fp.read(16)
-        print(f'[+] Identified volume GUID: {hex_to_guid(volume_guid.hex())} = {BITLOCKER_GUIDS.get(hex_to_guid(volume_guid.hex()))}')
+        volume_guid = try_read_fp(fp, 16)
+        volume_guid = hex_to_guid(volume_guid.hex())
+        volume_guid_id = BITLOCKER_GUIDS.get(volume_guid)
+        if volume_guid_id == None:
+            print("[!] Volume GUID not recognised. Exiting.")
+            sys.exit(1)
+        print(f'[+] Identified volume GUID: {volume_guid} = {volume_guid_id}')
 
         # get FVE metadata block addresses
-        FVE_metadata_offsets = [hex(uint_to_int(fp.read(8)) + bitlocker_offset) for _ in range(3)]
+        FVE_metadata_offsets = [hex(uint_to_int(try_read_fp(fp, 8)) + bitlocker_offset) for _ in range(3)]
         print(f'[+] FVE metadata info found at offsets {FVE_metadata_offsets}')
 
         # all metadata blocks should be the same
         for f in FVE_metadata_offsets:
 
             fp.seek(int(f, 16))
-            FVE_metadata_block = fp.read(2048)
+            FVE_metadata_block = try_read_fp(fp, 2048)
             parse_fve_metadata_block(FVE_metadata_block)
 
             break

@@ -237,7 +237,7 @@ def main():
                         PassphraseWrappedKEKStruct = d['CryptoUsers'][user_index].get('PassphraseWrappedKEKStruct')
                         fvde_hash = construct_fvde_hash(PassphraseWrappedKEKStruct)
 
-                        sys.stdout.write(f"{username_info}:{fvde_hash}:{full_name_info}:{passphrase_hint}")
+                        sys.stdout.write(f"{username_info}:{fvde_hash}:{full_name_info}:{passphrase_hint}\n")
 
     return
 
